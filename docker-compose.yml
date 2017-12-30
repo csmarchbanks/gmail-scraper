@@ -1,0 +1,45 @@
+version: '2.1'
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch-oss:6.1.1
+    container_name: elasticsearch
+    environment:
+      - cluster.name=docker-cluster
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - esdata1:/usr/share/elasticsearch/data
+    ports:
+      - 9200:9200
+
+  elasticsearch_exporter:
+    image: justwatch/elasticsearch_exporter:1.0.2rc2
+    command:
+     - '-es.uri=http://elasticsearch:9200'
+     - '-es.indices=true'
+    restart: always
+    ports:
+     - "127.0.0.1:9108:9108"
+    depends_on:
+      elasticsearch:
+        condition: service_started
+
+  gmail-scraper:
+    build: .
+    restart: on-failure
+    environment:
+      - GOOGLE_CLIENT_ID
+      - GOOGLE_CLIENT_SECRET
+      - 'ELASTICSEARCH_URLS=http://elasticsearch:9200'
+    ports:
+      - '8080:8080'
+    depends_on:
+      elasticsearch:
+        condition: service_started
+
+volumes:
+  esdata1:
