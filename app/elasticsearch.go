@@ -27,22 +27,12 @@ var emailIndexHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
 
 const (
 	index   = "emails"
-	mapping = `
-{
-	"settings":{
-		"number_of_shards": 1,
-		"number_of_replicas": 0
-	},
+	mapping = `{
 	"mappings":{
 		"email":{
 			"properties":{
 				"to":{
 					"type":"keyword"
-				},
-				"content":{
-					"type":"text",
-					"store": true,
-					"fielddata": true
 				},
 				"from":{
 					"type":"keyword"

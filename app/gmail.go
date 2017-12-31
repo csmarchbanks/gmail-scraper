@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"log"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -12,6 +14,7 @@ import (
 )
 
 var (
+	nWorkers              = 8
 	emailIdFetchHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name: "email_scraper_get_id_seconds",
 		Help: "Time taken to fetch email ids",
@@ -122,7 +125,7 @@ func IndexAllEmails(ctx context.Context, token *oauth2.Token) error {
 	t.Go(func() error {
 		return writeMessagesIdsToChannel(ctx, service, idChannel)
 	})
-	for i := 0; i < 100; i++ {
+	for i := 0; i < nWorkers; i++ {
 		t.Go(func() error {
 			return indexMessages(ctx, service, idChannel)
 		})
@@ -130,7 +133,16 @@ func IndexAllEmails(ctx context.Context, token *oauth2.Token) error {
 	return t.Wait()
 }
 
+func initNWorkers() {
+	v, err := strconv.Atoi(os.Getenv("WORKERS"))
+	if err != nil {
+		return
+	}
+	nWorkers = v
+}
+
 func init() {
 	prometheus.MustRegister(emailIdFetchHistogram)
 	prometheus.MustRegister(emailGetHistogram)
+	initNWorkers()
 }

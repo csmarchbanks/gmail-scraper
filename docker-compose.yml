@@ -1,4 +1,4 @@
-version: '2.1'
+version: '2.2'
 services:
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch-oss:6.1.1
@@ -12,9 +12,23 @@ services:
         soft: -1
         hard: -1
     volumes:
-      - esdata1:/usr/share/elasticsearch/data
+      - elastic_data:/usr/share/elasticsearch/data
     ports:
       - 9200:9200
+
+  gmail-scraper:
+    build: ./app
+    restart: on-failure
+    environment:
+      - GOOGLE_CLIENT_ID
+      - GOOGLE_CLIENT_SECRET
+      - 'WORKERS=128'
+      - 'ELASTICSEARCH_URLS=http://elasticsearch:9200'
+    ports:
+      - '8080:8080'
+    depends_on:
+      elasticsearch:
+        condition: service_started
 
   elasticsearch_exporter:
     image: justwatch/elasticsearch_exporter:1.0.2rc2
@@ -28,18 +42,28 @@ services:
       elasticsearch:
         condition: service_started
 
-  gmail-scraper:
-    build: ./app
-    restart: on-failure
-    environment:
-      - GOOGLE_CLIENT_ID
-      - GOOGLE_CLIENT_SECRET
-      - 'ELASTICSEARCH_URLS=http://elasticsearch:9200'
+  prometheus:
+    image: prom/prometheus:v2.0.0
+    volumes:
+      - ./prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
     ports:
-      - '8080:8080'
-    depends_on:
-      elasticsearch:
-        condition: service_started
+      - 9090:9090
+    links:
+      - elasticsearch_exporter
+      - gmail-scraper
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - 3000:3000
+    volumes:
+      - grafana_data:/var/lib/grafana
 
 volumes:
-  esdata1:
+  elastic_data:
+  prometheus_data:
+  grafana_data:
