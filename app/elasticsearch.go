@@ -61,33 +61,33 @@ const (
 
 var elasticClient *elastic.Client
 
-func NewEmail(msg *gmail.Message) Email {
+func NewEmail(msg *gmail.Message) (Email, error) {
+	if msg == nil || msg.Payload == nil || msg.Payload.Body == nil {
+		log.Fatalf("WTF: %v\n", msg)
+	}
 	data := msg.Payload.Body.Data
 	content, err := base64.URLEncoding.DecodeString(data)
 	if err != nil {
-		log.Println(data)
-		log.Fatalf("Error decoding content: %v", err)
+		return Email{}, err
 	}
 	return Email{
 		To:      parseHeader(msg, "To"),
 		From:    parseHeader(msg, "From"),
 		Subject: parseHeader(msg, "Subject"),
 		Content: string(content),
-	}
+	}, nil
 }
 
-func indexEmail(ctx context.Context, id string, email Email) {
+func indexEmail(ctx context.Context, id string, email Email) error {
 	start := time.Now()
+	defer emailIndexHistogram.Observe(time.Since(start).Seconds())
 	_, err := elasticClient.Index().
 		Index(index).
 		Type("email").
 		Id(id).
 		BodyJson(email).
 		Do(ctx)
-	if err != nil {
-		log.Fatalf("Error indexing to elasticsearch: %v", err)
-	}
-	emailIndexHistogram.Observe(time.Since(start).Seconds())
+	return err
 }
 
 func elasticURLs() []string {

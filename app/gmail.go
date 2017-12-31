@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"log"
-	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/oauth2"
 	gmail "google.golang.org/api/gmail/v1"
+	tomb "gopkg.in/tomb.v2"
 )
 
 var (
@@ -16,9 +16,9 @@ var (
 		Name: "email_scraper_get_id_seconds",
 		Help: "Time taken to fetch email ids",
 	})
-	emailWriteHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Name: "email_scraper_writer_email_seconds",
-		Help: "Time taken to get and index an email",
+	emailGetHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name: "email_scraper_get_email_seconds",
+		Help: "Time taken to get an email",
 	})
 )
 
@@ -33,18 +33,39 @@ func parseHeader(msg *gmail.Message, headerName string) string {
 	return ""
 }
 
-func writeAllMessages(ctx context.Context, service *gmail.Service, ch <-chan string) {
-	for id := range ch {
-		start := time.Now()
-		r, err := service.Users.Messages.Get(currentUser, id).Do()
-		if err != nil {
-			log.Printf("Unable to get message. %v", err)
-		}
-		email := NewEmail(r)
-		indexEmail(ctx, id, email)
+func getMessage(service *gmail.Service, id string) (*gmail.Message, error) {
+	start := time.Now()
+	defer emailGetHistogram.Observe(time.Since(start).Seconds())
+	return service.Users.Messages.Get(currentUser, id).Do()
+}
 
-		emailWriteHistogram.Observe(time.Since(start).Seconds())
+func indexMessages(ctx context.Context, service *gmail.Service, ch <-chan string) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case id, ok := <-ch:
+			if !ok {
+				return nil
+			}
+			r, err := getMessage(service, id)
+			if err != nil {
+				log.Printf("Error getting message from gmail: %v\n", err)
+				return err
+			}
+			email, err := NewEmail(r)
+			if err != nil {
+				log.Printf("Error decoding content: %v", err)
+				return err
+			}
+			err = indexEmail(ctx, id, email)
+			if err != nil {
+				log.Printf("Error indexing to elasticsearch: %v", err)
+				return err
+			}
+		}
 	}
+	return nil
 }
 
 func getPageOfMessages(service *gmail.Service, pageToken string) (*gmail.ListMessagesResponse, error) {
@@ -58,20 +79,26 @@ func getPageOfMessages(service *gmail.Service, pageToken string) (*gmail.ListMes
 	return r, err
 }
 
-func writeMessagesIdsToChannel(service *gmail.Service, ch chan string) {
+func writeMessagesIdsToChannel(ctx context.Context, service *gmail.Service, ch chan string) error {
+	defer close(ch)
 	pageToken := ""
 	for {
-		r, err := getPageOfMessages(service, pageToken)
-		if err != nil {
-			log.Printf("Unable to retrieve message ids. %v", err)
-		}
-		for _, message := range r.Messages {
-			ch <- message.Id
-		}
-		pageToken = r.NextPageToken
-		if pageToken == "" {
-			close(ch)
-			break
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+			r, err := getPageOfMessages(service, pageToken)
+			if err != nil {
+				log.Printf("Unable to retrieve message ids. %v", err)
+				return err
+			}
+			for _, message := range r.Messages {
+				ch <- message.Id
+			}
+			pageToken = r.NextPageToken
+			if pageToken == "" {
+				return nil
+			}
 		}
 	}
 }
@@ -79,28 +106,28 @@ func writeMessagesIdsToChannel(service *gmail.Service, ch chan string) {
 // IndexAllEmails will fetch all messages from the user whom the token
 // belongs to and index them into elasticsearch
 func IndexAllEmails(ctx context.Context, token *oauth2.Token) error {
+	t, ctx := tomb.WithContext(ctx)
 	client := googleOauthConfig.Client(ctx, token)
 
 	service, err := gmail.New(client)
 	if err != nil {
-		log.Fatalf("Unable to retrieve gmail Client %v", err)
+		log.Printf("Unable to retrieve gmail Client %v", err)
 		return err
 	}
+
 	idChannel := make(chan string, 20000)
-	go writeMessagesIdsToChannel(service, idChannel)
-	var wg sync.WaitGroup
+	t.Go(func() error {
+		return writeMessagesIdsToChannel(ctx, service, idChannel)
+	})
 	for i := 0; i < 16; i++ {
-		wg.Add(1)
-		go func() {
-			writeAllMessages(ctx, service, idChannel)
-			wg.Done()
-		}()
+		t.Go(func() error {
+			return indexMessages(ctx, service, idChannel)
+		})
 	}
-	wg.Wait()
-	return nil
+	return t.Wait()
 }
 
 func init() {
 	prometheus.MustRegister(emailIdFetchHistogram)
-	prometheus.MustRegister(emailWriteHistogram)
+	prometheus.MustRegister(emailGetHistogram)
 }

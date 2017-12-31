@@ -29,7 +29,7 @@ services:
         condition: service_started
 
   gmail-scraper:
-    build: .
+    build: ./app
     restart: on-failure
     environment:
       - GOOGLE_CLIENT_ID

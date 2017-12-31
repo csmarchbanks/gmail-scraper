@@ -55,6 +55,7 @@ func handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	err = IndexAllEmails(r.Context(), token)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	fmt.Fprintf(w, "Done")
 }
