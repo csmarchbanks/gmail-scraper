@@ -35,7 +35,9 @@ func parseHeader(msg *gmail.Message, headerName string) string {
 
 func getMessage(service *gmail.Service, id string) (*gmail.Message, error) {
 	start := time.Now()
-	defer emailGetHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		emailGetHistogram.Observe(time.Since(start).Seconds())
+	}()
 	return service.Users.Messages.Get(currentUser, id).Do()
 }
 
@@ -65,17 +67,18 @@ func indexMessages(ctx context.Context, service *gmail.Service, ch <-chan string
 			}
 		}
 	}
-	return nil
 }
 
 func getPageOfMessages(service *gmail.Service, pageToken string) (*gmail.ListMessagesResponse, error) {
 	start := time.Now()
+	defer func() {
+		emailIdFetchHistogram.Observe(time.Since(start).Seconds())
+	}()
 	req := service.Users.Messages.List(currentUser)
 	if pageToken != "" {
 		req.PageToken(pageToken)
 	}
 	r, err := req.Do()
-	emailIdFetchHistogram.Observe(time.Since(start).Seconds())
 	return r, err
 }
 
@@ -115,11 +118,11 @@ func IndexAllEmails(ctx context.Context, token *oauth2.Token) error {
 		return err
 	}
 
-	idChannel := make(chan string, 20000)
+	idChannel := make(chan string, 1000)
 	t.Go(func() error {
 		return writeMessagesIdsToChannel(ctx, service, idChannel)
 	})
-	for i := 0; i < 16; i++ {
+	for i := 0; i < 100; i++ {
 		t.Go(func() error {
 			return indexMessages(ctx, service, idChannel)
 		})

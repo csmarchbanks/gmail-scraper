@@ -80,7 +80,9 @@ func NewEmail(msg *gmail.Message) (Email, error) {
 
 func indexEmail(ctx context.Context, id string, email Email) error {
 	start := time.Now()
-	defer emailIndexHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		emailIndexHistogram.Observe(time.Since(start).Seconds())
+	}()
 	_, err := elasticClient.Index().
 		Index(index).
 		Type("email").
